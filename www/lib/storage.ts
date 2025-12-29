@@ -88,3 +88,16 @@ export async function getTextObject(objectKey: string) {
 export function getBucketName() {
   return bucket
 }
+
+export async function checkBucket() {
+  try {
+    await s3.send(
+      new HeadBucketCommand({
+        Bucket: bucket,
+      })
+    )
+    return true
+  } catch {
+    return false
+  }
+}

@@ -1,5 +1,6 @@
 import { ThemeToggle } from "./theme-toggle";
 import { Button } from "./ui/button";
+import { HealthStatus } from "./health-status";
 import {
   Dialog,
   DialogClose,
@@ -17,6 +18,7 @@ export default function Header() {
     <div className="py-4 px-6 flex items-center justify-between border-b">
       <h1 className="tracking-wider">TEXEDO</h1>
       <div className="flex items-center space-x-4">
+        <HealthStatus />
         <Dialog>
           <DialogTrigger asChild>
             <Button variant="outline" className="text-xs uppercase rounded-full flex items-center ">
