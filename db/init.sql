@@ -12,7 +12,9 @@ CREATE TABLE IF NOT EXISTS project_sources (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   path TEXT NOT NULL DEFAULT 'main.tex',
-  content TEXT NOT NULL,
+  content TEXT,
+  bucket TEXT,
+  object_key TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE (project_id, path)

@@ -1,5 +1,6 @@
 "use client"
 
+import Link from "next/link"
 import { useEffect, useState } from "react"
 import { Button } from "@/components/ui/button"
 import {
@@ -232,7 +233,11 @@ export default function Home() {
                 key={project.id}
                 title={project.title}
                 description={project.description}
-                action={<Button variant="secondary" size="sm">Open</Button>}
+                action={
+                  <Button asChild variant="secondary" size="sm">
+                    <Link href={`/project/${project.id}/editor`}>Open</Link>
+                  </Button>
+                }
                 content={
                   <div className="min-h-[3rem] space-y-1 text-sm text-muted-foreground">
                     <p>Created: {project.createdAt}</p>

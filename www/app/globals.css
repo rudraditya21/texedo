@@ -3,6 +3,11 @@
 
 @custom-variant dark (&:is(.dark *));
 
+::-webkit-scrollbar {
+  display: none;
+}
+
+
 :root {
   color-scheme: light;
   --background: oklch(1 0 0);
