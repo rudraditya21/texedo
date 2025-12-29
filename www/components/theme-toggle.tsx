@@ -23,7 +23,7 @@ export function ThemeToggle() {
     <button
       type="button"
       onClick={toggleTheme}
-      className="inline-flex items-center gap-2 rounded-full border border-border bg-card px-4 py-2 text-sm font-medium shadow-sm transition hover:bg-accent"
+      className="inline-flex items-center uppercase gap-2 rounded-full border border-border bg-card px-4 py-2 text-sm font-medium shadow-sm transition hover:bg-accent"
       aria-pressed={mounted ? isDark : undefined}
       aria-label="Toggle theme"
       suppressHydrationWarning
