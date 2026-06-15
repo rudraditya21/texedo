@@ -7,12 +7,14 @@ type HealthState = {
   status: "online" | "degraded" | "unknown"
   db: "online" | "offline" | "unknown"
   minio: "online" | "offline" | "unknown"
+  redis: "online" | "offline" | "unknown"
 }
 
 const initialState: HealthState = {
   status: "unknown",
   db: "unknown",
   minio: "unknown",
+  redis: "unknown",
 }
 
 // Poll every 60 s instead of 15 s to reduce server load across open tabs.
