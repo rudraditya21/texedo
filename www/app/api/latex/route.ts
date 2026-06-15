@@ -2,6 +2,7 @@ import { promises as fs } from "fs"
 import { spawn } from "child_process"
 import path from "path"
 import { NextResponse } from "next/server"
+import { logger } from "@/lib/logger"
 
 export const runtime = "nodejs"
 
@@ -9,7 +10,6 @@ const COMPILE_TIMEOUT_MS = 15_000
 const LATEX_MAX_BYTES = 5 * 1024 * 1024 // 5 MB input guard
 
 // ── In-memory rate limiter ────────────────────────────────────────────────────
-// 10 compilations per IP per minute. Resets per window (not sliding).
 const RATE_LIMIT_MAX = 10
 const RATE_WINDOW_MS = 60_000
 
@@ -33,7 +33,6 @@ function checkRateLimit(ip: string): { allowed: boolean; retryAfterMs: number } 
   return { allowed: true, retryAfterMs: 0 }
 }
 
-// Prune stale buckets periodically to avoid unbounded map growth.
 setInterval(() => {
   const now = Date.now()
   for (const [key, bucket] of rateBuckets) {
@@ -79,12 +78,12 @@ function runPdflatexLocal(workDir: string, texPath: string) {
 }
 
 export async function POST(request: Request) {
-  // Identify caller by X-Forwarded-For (set by reverse proxy) or fall back.
   const forwarded = request.headers.get("x-forwarded-for")
   const ip = (forwarded ? forwarded.split(",")[0] : "unknown").trim()
 
   const { allowed, retryAfterMs } = checkRateLimit(ip)
   if (!allowed) {
+    logger.warn("LaTeX rate limit exceeded", { ip })
     return new NextResponse("Too many compilation requests. Try again shortly.", {
       status: 429,
       headers: {
@@ -110,10 +109,12 @@ export async function POST(request: Request) {
   const texPath = path.join(tempDir, `${fileBase}.tex`)
   const pdfPath = path.join(tempDir, `${fileBase}.pdf`)
 
+  const start = Date.now()
   try {
     await fs.writeFile(texPath, source, "utf8")
     await runPdflatexLocal(tempDir, texPath)
     const pdfBuffer = await fs.readFile(pdfPath)
+    logger.info("LaTeX compiled", { ip, durationMs: Date.now() - start })
     return new NextResponse(pdfBuffer, {
       headers: {
         "Content-Type": "application/pdf",
@@ -123,6 +124,11 @@ export async function POST(request: Request) {
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "LaTeX compile failed."
+    logger.warn("LaTeX compile error", {
+      ip,
+      durationMs: Date.now() - start,
+      error: message.slice(0, 500),
+    })
     return new NextResponse(message, { status: 422 })
   } finally {
     await fs.rm(tempDir, { recursive: true, force: true })

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server"
 import { db } from "@/lib/db"
 import { getBucketName, uploadTextObject } from "@/lib/storage"
+import { logger } from "@/lib/logger"
 
 const TITLE_MAX = 200
 const DESCRIPTION_MAX = 1000
@@ -14,10 +15,15 @@ type ProjectRow = {
 }
 
 export async function GET() {
-  const result = await db.query<ProjectRow>(
-    "SELECT id, title, description, created_at, updated_at FROM projects ORDER BY created_at DESC"
-  )
-  return NextResponse.json(result.rows)
+  try {
+    const result = await db.query<ProjectRow>(
+      "SELECT id, title, description, created_at, updated_at FROM projects ORDER BY created_at DESC"
+    )
+    return NextResponse.json(result.rows)
+  } catch (error) {
+    logger.error("GET /api/projects failed", { error: String(error) })
+    return NextResponse.json({ error: "Failed to load projects." }, { status: 500 })
+  }
 }
 
 export async function POST(request: Request) {
@@ -99,10 +105,12 @@ This is a quick example with math $E = mc^2$ and a fraction:
       [project.id, "main.tex", null, getBucketName(), objectKey]
     )
     await client.query("COMMIT")
+    logger.info("Project created", { projectId: project.id })
     return NextResponse.json(project, { status: 201 })
   } catch (error) {
     await client.query("ROLLBACK")
-    throw error
+    logger.error("POST /api/projects failed", { error: String(error) })
+    return NextResponse.json({ error: "Failed to create project." }, { status: 500 })
   } finally {
     client.release()
   }

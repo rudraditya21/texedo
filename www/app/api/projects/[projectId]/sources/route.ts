@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server"
 import { db } from "@/lib/db"
 import { getBucketName, getTextObject, uploadTextObject } from "@/lib/storage"
+import { logger } from "@/lib/logger"
 
 const PATH_MAX = 255
 const CONTENT_MAX_BYTES = 5 * 1024 * 1024 // 5 MB
@@ -10,8 +11,6 @@ const UUID_RE =
 
 function isValidPath(p: string): boolean {
   if (!p || p.length > PATH_MAX) return false
-  // Reject directory traversal, absolute paths, null bytes, and
-  // characters that are unsafe in object-storage keys.
   if (p.includes("..") || p.startsWith("/") || p.includes("\0")) return false
   return /^[a-zA-Z0-9._\-/]+$/.test(p)
 }
@@ -33,35 +32,44 @@ export async function GET(
     return NextResponse.json({ error: "Invalid or missing path parameter." }, { status: 400 })
   }
 
-  const projectCheck = await db.query("SELECT id FROM projects WHERE id = $1", [projectId])
-  if (projectCheck.rowCount === 0) {
-    return NextResponse.json({ error: "Project not found." }, { status: 404 })
+  try {
+    const projectCheck = await db.query("SELECT id FROM projects WHERE id = $1", [projectId])
+    if (projectCheck.rowCount === 0) {
+      return NextResponse.json({ error: "Project not found." }, { status: 404 })
+    }
+
+    const sourceResult = await db.query<{
+      id: string
+      path: string
+      content: string | null
+      object_key: string | null
+    }>(
+      "SELECT id, path, content, object_key FROM project_sources WHERE project_id = $1 AND path = $2",
+      [projectId, path]
+    )
+
+    if (sourceResult.rowCount === 0) {
+      return NextResponse.json({ error: "Source not found." }, { status: 404 })
+    }
+
+    const source = sourceResult.rows[0]
+    let content = ""
+
+    if (source.object_key) {
+      content = (await getTextObject(source.object_key)) ?? ""
+    } else if (source.content) {
+      content = source.content
+    }
+
+    return NextResponse.json({ id: source.id, path: source.path, content })
+  } catch (error) {
+    logger.error("GET /api/projects/[projectId]/sources failed", {
+      projectId,
+      path,
+      error: String(error),
+    })
+    return NextResponse.json({ error: "Failed to load source." }, { status: 500 })
   }
-
-  const sourceResult = await db.query<{
-    id: string
-    path: string
-    content: string | null
-    object_key: string | null
-  }>(
-    "SELECT id, path, content, object_key FROM project_sources WHERE project_id = $1 AND path = $2",
-    [projectId, path]
-  )
-
-  if (sourceResult.rowCount === 0) {
-    return NextResponse.json({ error: "Source not found." }, { status: 404 })
-  }
-
-  const source = sourceResult.rows[0]
-  let content = ""
-
-  if (source.object_key) {
-    content = (await getTextObject(source.object_key)) ?? ""
-  } else if (source.content) {
-    content = source.content
-  }
-
-  return NextResponse.json({ id: source.id, path: source.path, content })
 }
 
 export async function PATCH(
@@ -105,23 +113,32 @@ export async function PATCH(
     )
   }
 
-  const projectResult = await db.query(
-    "SELECT id FROM projects WHERE id = $1",
-    [projectId]
-  )
-  if (projectResult.rowCount === 0) {
-    return NextResponse.json({ error: "Project not found." }, { status: 404 })
+  try {
+    const projectResult = await db.query(
+      "SELECT id FROM projects WHERE id = $1",
+      [projectId]
+    )
+    if (projectResult.rowCount === 0) {
+      return NextResponse.json({ error: "Project not found." }, { status: 404 })
+    }
+
+    const objectKey = `projects/${projectId}/${path}`
+    await uploadTextObject(objectKey, content)
+    await db.query(
+      `INSERT INTO project_sources (project_id, path, content, bucket, object_key)
+       VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (project_id, path)
+       DO UPDATE SET bucket = EXCLUDED.bucket, object_key = EXCLUDED.object_key, content = NULL, updated_at = NOW()`,
+      [projectId, path, null, getBucketName(), objectKey]
+    )
+
+    return NextResponse.json({ ok: true })
+  } catch (error) {
+    logger.error("PATCH /api/projects/[projectId]/sources failed", {
+      projectId,
+      path,
+      error: String(error),
+    })
+    return NextResponse.json({ error: "Failed to save source." }, { status: 500 })
   }
-
-  const objectKey = `projects/${projectId}/${path}`
-  await uploadTextObject(objectKey, content)
-  await db.query(
-    `INSERT INTO project_sources (project_id, path, content, bucket, object_key)
-     VALUES ($1, $2, $3, $4, $5)
-     ON CONFLICT (project_id, path)
-     DO UPDATE SET bucket = EXCLUDED.bucket, object_key = EXCLUDED.object_key, content = NULL, updated_at = NOW()`,
-    [projectId, path, null, getBucketName(), objectKey]
-  )
-
-  return NextResponse.json({ ok: true })
 }
