@@ -1,8 +1,5 @@
 import { Pool } from "pg"
-
-const connectionString =
-  process.env.DATABASE_URL ||
-  `postgresql://${process.env.POSTGRES_USER || "texedo"}:${process.env.POSTGRES_PASSWORD || "texedo_password"}@${process.env.POSTGRES_HOST || "localhost"}:${process.env.POSTGRES_PORT || "5432"}/${process.env.POSTGRES_DB || "texedo_db"}`
+import { getDbConnectionString } from "@/lib/env"
 
 const globalForDb = globalThis as typeof globalThis & {
   pgPool?: Pool
@@ -11,7 +8,10 @@ const globalForDb = globalThis as typeof globalThis & {
 export const db =
   globalForDb.pgPool ??
   new Pool({
-    connectionString,
+    connectionString: getDbConnectionString(),
+    max: 10,
+    idleTimeoutMillis: 30_000,
+    connectionTimeoutMillis: 3_000,
   })
 
 if (process.env.NODE_ENV !== "production") {

@@ -5,36 +5,25 @@ import {
   PutObjectCommand,
   S3Client,
 } from "@aws-sdk/client-s3"
-
-const endpoint = process.env.MINIO_ENDPOINT || "http://localhost:9000"
-const region = process.env.MINIO_REGION || "us-east-1"
-const accessKeyId = process.env.MINIO_ROOT_USER || "texedo"
-const secretAccessKey = process.env.MINIO_ROOT_PASSWORD || "texedo_minio_password"
-const bucket = process.env.MINIO_BUCKET || "texedo"
+import { env } from "@/lib/env"
 
 const s3 = new S3Client({
-  region,
-  endpoint,
+  region: env.minioRegion,
+  endpoint: env.minioEndpoint,
   forcePathStyle: true,
   credentials: {
-    accessKeyId,
-    secretAccessKey,
+    accessKeyId: env.minioRootUser,
+    secretAccessKey: env.minioRootPassword,
   },
 })
 
+const bucket = env.minioBucket
+
 async function ensureBucketExists() {
   try {
-    await s3.send(
-      new HeadBucketCommand({
-        Bucket: bucket,
-      })
-    )
+    await s3.send(new HeadBucketCommand({ Bucket: bucket }))
   } catch {
-    await s3.send(
-      new CreateBucketCommand({
-        Bucket: bucket,
-      })
-    )
+    await s3.send(new CreateBucketCommand({ Bucket: bucket }))
   }
 }
 
@@ -74,14 +63,9 @@ export async function uploadTextObject(objectKey: string, content: string) {
 
 export async function getTextObject(objectKey: string) {
   const response = await s3.send(
-    new GetObjectCommand({
-      Bucket: bucket,
-      Key: objectKey,
-    })
+    new GetObjectCommand({ Bucket: bucket, Key: objectKey })
   )
-  if (!response.Body) {
-    return null
-  }
+  if (!response.Body) return null
   return streamToString(response.Body as ReadableStream | NodeJS.ReadableStream)
 }
 
@@ -91,11 +75,7 @@ export function getBucketName() {
 
 export async function checkBucket() {
   try {
-    await s3.send(
-      new HeadBucketCommand({
-        Bucket: bucket,
-      })
-    )
+    await s3.send(new HeadBucketCommand({ Bucket: bucket }))
     return true
   } catch {
     return false
