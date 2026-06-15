@@ -2,6 +2,9 @@ import { NextResponse } from "next/server"
 import { db } from "@/lib/db"
 import { getBucketName, uploadTextObject } from "@/lib/storage"
 
+const TITLE_MAX = 200
+const DESCRIPTION_MAX = 1000
+
 type ProjectRow = {
   id: string
   title: string
@@ -18,15 +21,44 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
-  const body = (await request.json()) as {
-    title?: string
-    description?: string | null
+  let body: unknown
+  try {
+    body = await request.json()
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON body." }, { status: 400 })
   }
-  const title = body.title?.trim()
-  const description = body.description?.trim() || null
 
-  if (!title) {
+  if (!body || typeof body !== "object") {
+    return NextResponse.json({ error: "Invalid request body." }, { status: 400 })
+  }
+
+  const { title: rawTitle, description: rawDescription } = body as Record<string, unknown>
+
+  if (typeof rawTitle !== "string" || !rawTitle.trim()) {
     return NextResponse.json({ error: "Title is required." }, { status: 400 })
+  }
+
+  const title = rawTitle.trim()
+  if (title.length > TITLE_MAX) {
+    return NextResponse.json(
+      { error: `Title must be ${TITLE_MAX} characters or fewer.` },
+      { status: 400 }
+    )
+  }
+
+  let description: string | null = null
+  if (rawDescription != null) {
+    if (typeof rawDescription !== "string") {
+      return NextResponse.json({ error: "Description must be a string." }, { status: 400 })
+    }
+    const trimmed = rawDescription.trim()
+    if (trimmed.length > DESCRIPTION_MAX) {
+      return NextResponse.json(
+        { error: `Description must be ${DESCRIPTION_MAX} characters or fewer.` },
+        { status: 400 }
+      )
+    }
+    description = trimmed || null
   }
 
   const defaultSource = `\\documentclass{article}
