@@ -22,6 +22,9 @@ export const env = {
   postgresPort: optionalEnv("POSTGRES_PORT", "5432"),
   postgresDb: optionalEnv("POSTGRES_DB", "texedo_db"),
 
+  // Redis
+  redisUrl: optionalEnv("REDIS_URL", "redis://localhost:6379"),
+
   // MinIO / S3-compatible object storage
   minioEndpoint: optionalEnv("MINIO_ENDPOINT", "http://localhost:9000"),
   minioRegion: optionalEnv("MINIO_REGION", "us-east-1"),
