@@ -33,6 +33,19 @@ CREATE TABLE IF NOT EXISTS project_files (
   UNIQUE (project_id, object_key)
 );
 
+-- Indexes for common query patterns
+CREATE INDEX IF NOT EXISTS idx_project_sources_project_id
+  ON project_sources (project_id);
+
+CREATE INDEX IF NOT EXISTS idx_project_sources_project_path
+  ON project_sources (project_id, path);
+
+CREATE INDEX IF NOT EXISTS idx_project_files_project_id
+  ON project_files (project_id);
+
+CREATE INDEX IF NOT EXISTS idx_projects_created_at
+  ON projects (created_at DESC);
+
 CREATE OR REPLACE FUNCTION set_updated_at()
 RETURNS TRIGGER AS $$
 BEGIN
