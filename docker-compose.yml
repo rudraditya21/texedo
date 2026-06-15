@@ -23,6 +23,26 @@ services:
           cpus: "1.0"
           memory: 512M
 
+  redis:
+    build:
+      context: ./redis
+    container_name: texedo-redis
+    restart: unless-stopped
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+
   minio:
     build:
       context: ./minio
@@ -69,4 +89,5 @@ services:
 
 volumes:
   postgres_data:
+  redis_data:
   minio_data:
