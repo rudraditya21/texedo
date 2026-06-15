@@ -35,10 +35,9 @@ This is a quick example with math $E = mc^2$ and a fraction:
 \\end{document}
 `;
 
-type ProjectSource = {
+type SourceMeta = {
   id: string;
   path: string;
-  content: string;
 };
 
 export default function EditorPage() {
@@ -48,11 +47,12 @@ export default function EditorPage() {
   const [code, setCode] = useState(defaultCode);
   const [previewPdfUrl, setPreviewPdfUrl] = useState<string | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [numPages, setNumPages] = useState<number | null>(null);
   const [zoom, setZoom] = useState(1);
   const [pageWidth, setPageWidth] = useState<number | null>(null);
   const [activePage, setActivePage] = useState(1);
-  const [activeFile, setActiveFile] = useState<ProjectSource | null>(null);
+  const [activeFile, setActiveFile] = useState<SourceMeta | null>(null);
   const previewUrlRef = useRef<string | null>(null);
   const previewPaneRef = useRef<HTMLDivElement | null>(null);
   const pageRefs = useRef<Array<HTMLDivElement | null>>([]);
@@ -227,23 +227,53 @@ export default function EditorPage() {
     return () => observer.disconnect();
   }, [previewPdfUrl, numPages]);
 
+  // Two-step load: fetch project metadata → then fetch content for the active file.
   useEffect(() => {
+    if (!projectId) return;
+    const controller = new AbortController();
+
     const loadProject = async () => {
-      if (!projectId) return;
-      const response = await fetch(`/api/projects/${projectId}`);
-      if (!response.ok) return;
-      const data = (await response.json()) as {
-        sources: ProjectSource[];
-      };
-      const mainSource =
-        data.sources.find((source) => source.path === "main.tex") ||
-        data.sources[0];
-      if (mainSource) {
-        setActiveFile(mainSource);
-        setCode(mainSource.content);
+      try {
+        const metaRes = await fetch(`/api/projects/${projectId}`, {
+          signal: controller.signal,
+        });
+        if (!metaRes.ok) {
+          setLoadError("Failed to load project. Please refresh.");
+          return;
+        }
+
+        const data = (await metaRes.json()) as {
+          sources: SourceMeta[];
+        };
+
+        const targetSource =
+          data.sources.find((s) => s.path === "main.tex") || data.sources[0];
+
+        if (!targetSource) return;
+
+        setActiveFile(targetSource);
+
+        // Fetch content for the active file only — not all files at once.
+        const contentRes = await fetch(
+          `/api/projects/${projectId}/sources?path=${encodeURIComponent(targetSource.path)}`,
+          { signal: controller.signal }
+        );
+        if (!contentRes.ok) {
+          setLoadError("Failed to load file content. Please refresh.");
+          return;
+        }
+
+        const contentData = (await contentRes.json()) as { content: string };
+        setCode(contentData.content);
+        setLoadError(null);
+      } catch (error) {
+        if (error instanceof DOMException && error.name === "AbortError") return;
+        setLoadError("Failed to load project. Please refresh.");
       }
     };
+
     void loadProject();
+    return () => controller.abort();
   }, [projectId]);
 
   const handleEditorMount = useCallback(
@@ -258,147 +288,156 @@ export default function EditorPage() {
 
   return (
     <div className="h-screen overflow-hidden bg-background text-foreground">
-      <div className="grid h-full grid-cols-1 lg:grid-cols-2">
-        <section className="flex h-full min-h-0 flex-col border-b lg:border-b-0 lg:border-r">
-          <div className="flex items-center justify-between border-b px-4 py-3">
-            <div>
-              <p className="text-sm font-semibold">Editor</p>
-              <p className="text-xs text-muted-foreground">
-                {activeFile ? activeFile.path : "main.tex"}
-              </p>
+      {loadError ? (
+        <div className="flex h-full items-center justify-center">
+          <div className="rounded-lg border border-destructive/40 bg-destructive/10 p-6 text-sm text-destructive">
+            <p className="font-medium">Error</p>
+            <p className="mt-1">{loadError}</p>
+          </div>
+        </div>
+      ) : (
+        <div className="grid h-full grid-cols-1 lg:grid-cols-2">
+          <section className="flex h-full min-h-0 flex-col border-b lg:border-b-0 lg:border-r">
+            <div className="flex items-center justify-between border-b px-4 py-3">
+              <div>
+                <p className="text-sm font-semibold">Editor</p>
+                <p className="text-xs text-muted-foreground">
+                  {activeFile ? activeFile.path : "main.tex"}
+                </p>
+              </div>
+              <span className="text-xs text-muted-foreground">Auto-saving</span>
             </div>
-            <span className="text-xs text-muted-foreground">Auto-saving</span>
-          </div>
-          <div className="flex-1 min-h-0">
-            <Editor
-              height="100%"
-              width="100%"
-              defaultLanguage="plaintext"
-              value={code}
-              onChange={(value) => setCode(value ?? "")}
-              theme={resolvedTheme === "dark" ? "vs-dark" : "light"}
-              options={editorOptions}
-              onMount={handleEditorMount}
-            />
-          </div>
-        </section>
+            <div className="flex-1 min-h-0">
+              <Editor
+                height="100%"
+                width="100%"
+                defaultLanguage="plaintext"
+                value={code}
+                onChange={(value) => setCode(value ?? "")}
+                theme={resolvedTheme === "dark" ? "vs-dark" : "light"}
+                options={editorOptions}
+                onMount={handleEditorMount}
+              />
+            </div>
+          </section>
 
-        <section className="flex h-full min-h-0 flex-col bg-muted/30">
-          <div className="flex items-center gap-2 border-b px-4 py-3">
-            <p className="text-sm font-semibold">Live Preview</p>
-            <span className="text-xs text-muted-foreground">
-              {activePage}
-              {numPages ? ` / ${numPages}` : ""}
-            </span>
-            <span className="ml-auto text-xs text-muted-foreground">
-              Zoom {(zoom * 100).toFixed(0)}%
-            </span>
-          </div>
-          <div className="flex-1 min-h-0 p-4">
-            <div
-              className={`flex h-full flex-col rounded-xl border p-4 ${
-                zoom < 1 ? "bg-accent/20" : "bg-card"
-              }`}
-            >
-              <div className="flex flex-wrap items-center gap-2 pb-3">
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setZoom((prev) => Math.min(prev + 0.1, 2.5))}
-                >
-                  Zoom +
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setZoom((prev) => Math.max(prev - 0.1, 0.6))}
-                >
-                  Zoom -
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setZoom(1)}
-                >
-                  Reset
-                </Button>
-                {previewPdfUrl ? (
-                  <Button asChild variant="secondary" size="sm">
-                    <a href={previewPdfUrl} download="preview.pdf">
-                      Download
-                    </a>
-                  </Button>
-                ) : null}
-              </div>
-              <div className="flex-1 min-h-0 overflow-y-auto pr-2" ref={previewPaneRef}>
-                {previewError ? (
-                  <div className="rounded-lg border border-destructive/40 bg-destructive/10 p-4 text-sm text-destructive">
-                    <p className="font-medium">Preview error</p>
-                    <p className="mt-2 whitespace-pre-wrap font-mono text-xs text-destructive/80">
-                      {previewError}
-                    </p>
-                  </div>
-                ) : previewPdfUrl ? (
-                  <Document
-                    file={previewPdfUrl}
-                    onLoadSuccess={({ numPages: loadedPages }) => {
-                      setNumPages(loadedPages);
-                      setActivePage(1);
-                    }}
-                    onLoadError={(error) => {
-                      setPreviewError(error?.message || "Failed to load PDF.");
-                    }}
-                    loading={
-                      <div className="text-sm text-muted-foreground">
-                        Loading PDF…
-                      </div>
-                    }
-                    error={
-                      <div className="text-sm text-destructive">
-                        Failed to load PDF.
-                      </div>
-                    }
+          <section className="flex h-full min-h-0 flex-col bg-muted/30">
+            <div className="flex items-center gap-2 border-b px-4 py-3">
+              <p className="text-sm font-semibold">Live Preview</p>
+              <span className="text-xs text-muted-foreground">
+                {activePage}
+                {numPages ? ` / ${numPages}` : ""}
+              </span>
+              <span className="ml-auto text-xs text-muted-foreground">
+                Zoom {(zoom * 100).toFixed(0)}%
+              </span>
+            </div>
+            <div className="flex-1 min-h-0 p-4">
+              <div
+                className={`flex h-full flex-col rounded-xl border p-4 ${
+                  zoom < 1 ? "bg-accent/20" : "bg-card"
+                }`}
+              >
+                <div className="flex flex-wrap items-center gap-2 pb-3">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setZoom((prev) => Math.min(prev + 0.1, 2.5))}
                   >
-                    {numPages
-                      ? Array.from({ length: numPages }, (_, index) => {
-                          const pageIndex = index + 1;
-                          return (
-                            <div
-                              key={pageIndex}
-                              data-page={pageIndex}
-                              ref={(node) => {
-                                pageRefs.current[pageIndex - 1] = node;
-                              }}
-                              className="mb-4"
-                            >
-                              <Page
-                                pageNumber={pageIndex}
-                                width={
-                                  pageWidth
-                                    ? Math.floor(pageWidth * zoom)
-                                    : undefined
-                                }
-                                renderTextLayer
-                                renderAnnotationLayer
-                              />
-                            </div>
-                          );
-                        })
-                      : null}
-                  </Document>
-                ) : (
-                  <div className="flex h-full flex-col items-center justify-center rounded-lg border border-dashed bg-card p-6 text-sm text-muted-foreground">
-                    Waiting for preview...
-                  </div>
-                )}
+                    Zoom +
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setZoom((prev) => Math.max(prev - 0.1, 0.6))}
+                  >
+                    Zoom -
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setZoom(1)}
+                  >
+                    Reset
+                  </Button>
+                  {previewPdfUrl ? (
+                    <Button asChild variant="secondary" size="sm">
+                      <a href={previewPdfUrl} download="preview.pdf">
+                        Download
+                      </a>
+                    </Button>
+                  ) : null}
+                </div>
+                <div className="flex-1 min-h-0 overflow-y-auto pr-2" ref={previewPaneRef}>
+                  {previewError ? (
+                    <div className="rounded-lg border border-destructive/40 bg-destructive/10 p-4 text-sm text-destructive">
+                      <p className="font-medium">Preview error</p>
+                      <p className="mt-2 whitespace-pre-wrap font-mono text-xs text-destructive/80">
+                        {previewError}
+                      </p>
+                    </div>
+                  ) : previewPdfUrl ? (
+                    <Document
+                      file={previewPdfUrl}
+                      onLoadSuccess={({ numPages: loadedPages }) => {
+                        setNumPages(loadedPages);
+                        setActivePage(1);
+                      }}
+                      onLoadError={(error) => {
+                        setPreviewError(error?.message || "Failed to load PDF.");
+                      }}
+                      loading={
+                        <div className="text-sm text-muted-foreground">
+                          Loading PDF…
+                        </div>
+                      }
+                      error={
+                        <div className="text-sm text-destructive">
+                          Failed to load PDF.
+                        </div>
+                      }
+                    >
+                      {numPages
+                        ? Array.from({ length: numPages }, (_, index) => {
+                            const pageIndex = index + 1;
+                            return (
+                              <div
+                                key={pageIndex}
+                                data-page={pageIndex}
+                                ref={(node) => {
+                                  pageRefs.current[pageIndex - 1] = node;
+                                }}
+                                className="mb-4"
+                              >
+                                <Page
+                                  pageNumber={pageIndex}
+                                  width={
+                                    pageWidth
+                                      ? Math.floor(pageWidth * zoom)
+                                      : undefined
+                                  }
+                                  renderTextLayer
+                                  renderAnnotationLayer
+                                />
+                              </div>
+                            );
+                          })
+                        : null}
+                    </Document>
+                  ) : (
+                    <div className="flex h-full flex-col items-center justify-center rounded-lg border border-dashed bg-card p-6 text-sm text-muted-foreground">
+                      Waiting for preview...
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
-          </div>
-        </section>
-      </div>
+          </section>
+        </div>
+      )}
     </div>
   );
 }
