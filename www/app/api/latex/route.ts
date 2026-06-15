@@ -1,45 +1,20 @@
 import { promises as fs } from "fs"
 import { spawn } from "child_process"
+import { createHash } from "crypto"
 import path from "path"
 import { NextResponse } from "next/server"
 import { logger } from "@/lib/logger"
+import { checkRateLimit, getCachedPdf, cachePdf } from "@/lib/redis"
 
 export const runtime = "nodejs"
 
 const COMPILE_TIMEOUT_MS = 15_000
 const LATEX_MAX_BYTES = 5 * 1024 * 1024 // 5 MB input guard
+const RATE_LIMIT_MAX = 10               // kept here for response headers
 
-// ── In-memory rate limiter ────────────────────────────────────────────────────
-const RATE_LIMIT_MAX = 10
-const RATE_WINDOW_MS = 60_000
-
-type RateBucket = { count: number; resetAt: number }
-const rateBuckets = new Map<string, RateBucket>()
-
-function checkRateLimit(ip: string): { allowed: boolean; retryAfterMs: number } {
-  const now = Date.now()
-  const bucket = rateBuckets.get(ip)
-
-  if (!bucket || now >= bucket.resetAt) {
-    rateBuckets.set(ip, { count: 1, resetAt: now + RATE_WINDOW_MS })
-    return { allowed: true, retryAfterMs: 0 }
-  }
-
-  if (bucket.count >= RATE_LIMIT_MAX) {
-    return { allowed: false, retryAfterMs: bucket.resetAt - now }
-  }
-
-  bucket.count++
-  return { allowed: true, retryAfterMs: 0 }
+function sha256(text: string): string {
+  return createHash("sha256").update(text).digest("hex")
 }
-
-setInterval(() => {
-  const now = Date.now()
-  for (const [key, bucket] of rateBuckets) {
-    if (now >= bucket.resetAt) rateBuckets.delete(key)
-  }
-}, RATE_WINDOW_MS)
-// ─────────────────────────────────────────────────────────────────────────────
 
 async function ensureTempDir() {
   const root = path.join(process.cwd(), ".latex-tmp")
@@ -67,7 +42,7 @@ function runPdflatexLocal(workDir: string, texPath: string) {
 
     child.stdout.on("data", (data) => { stdout += data.toString() })
     child.stderr.on("data", (data) => { stderr += data.toString() })
-    child.on("error", (error) => { clearTimeout(timer); reject(error) })
+    child.on("error", (err) => { clearTimeout(timer); reject(err) })
     child.on("close", (code) => {
       clearTimeout(timer)
       if (code === 0) { resolve(); return }
@@ -78,10 +53,11 @@ function runPdflatexLocal(workDir: string, texPath: string) {
 }
 
 export async function POST(request: Request) {
+  // ── Rate limit (Redis sliding window) ─────────────────────────────────────
   const forwarded = request.headers.get("x-forwarded-for")
   const ip = (forwarded ? forwarded.split(",")[0] : "unknown").trim()
 
-  const { allowed, retryAfterMs } = checkRateLimit(ip)
+  const { allowed, retryAfterMs } = await checkRateLimit(ip)
   if (!allowed) {
     logger.warn("LaTeX rate limit exceeded", { ip })
     return new NextResponse("Too many compilation requests. Try again shortly.", {
@@ -94,6 +70,7 @@ export async function POST(request: Request) {
     })
   }
 
+  // ── Input validation ───────────────────────────────────────────────────────
   const source = await request.text()
 
   if (!source.trim()) {
@@ -104,6 +81,22 @@ export async function POST(request: Request) {
     return new NextResponse("LaTeX input exceeds the 5 MB limit.", { status: 400 })
   }
 
+  // ── PDF cache (Redis) ──────────────────────────────────────────────────────
+  // Same source always produces the same PDF — skip compilation on cache hit.
+  const sourceHash = sha256(source)
+  const cached = await getCachedPdf(sourceHash)
+  if (cached) {
+    logger.info("LaTeX cache hit", { ip, hash: sourceHash.slice(0, 12) })
+    return new NextResponse(cached, {
+      headers: {
+        "Content-Type": "application/pdf",
+        "Cache-Control": "no-store",
+        "X-Cache": "HIT",
+      },
+    })
+  }
+
+  // ── Compilation ────────────────────────────────────────────────────────────
   const tempDir = await ensureTempDir()
   const fileBase = "main"
   const texPath = path.join(tempDir, `${fileBase}.tex`)
@@ -114,11 +107,21 @@ export async function POST(request: Request) {
     await fs.writeFile(texPath, source, "utf8")
     await runPdflatexLocal(tempDir, texPath)
     const pdfBuffer = await fs.readFile(pdfPath)
-    logger.info("LaTeX compiled", { ip, durationMs: Date.now() - start })
+
+    // Store in cache for future requests with identical source.
+    await cachePdf(sourceHash, pdfBuffer)
+
+    logger.info("LaTeX compiled", {
+      ip,
+      durationMs: Date.now() - start,
+      hash: sourceHash.slice(0, 12),
+    })
+
     return new NextResponse(pdfBuffer, {
       headers: {
         "Content-Type": "application/pdf",
         "Cache-Control": "no-store",
+        "X-Cache": "MISS",
       },
     })
   } catch (error) {
